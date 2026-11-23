@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!--
+    Uncomment the tag below to lay the app out underneath the parts of the
+    screen that the device obstructs, such as a display cutout, the rounded
+    corners of the screen, or a home indicator.
+
+    Without it, the browser keeps the app clear of them, and `SafeArea` and
+    `MediaQuery.paddingOf` report no padding. With it, the app covers the whole
+    screen, and it is up to the app to keep its own content out of the way,
+    which is what `SafeArea` is for.
+  -->
+  <!-- <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"> -->
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="myfinance">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>MyFinance</title>
+  <link rel="manifest" href="manifest.json">
+  <script src="sql-wasm.js"></script>
+  <script src="tesseract.min.js"></script>
+  <script>
+    // Always clear service workers on load to avoid stale JS caching during local preview
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (let registration of registrations) {
+          registration.unregister();
+        }
+      });
+    }
+
+    // WebAuthn Biometrics Support for Safari iOS & Modern Web Browsers
+    window.isWebAuthnAvailable = async function() {
+      try {
+        if (window.PublicKeyCredential && 
+            typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === 'function') {
+          return await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+        }
+      } catch (e) {
+        console.warn('WebAuthn check notice:', e);
+      }
+      return false;
+    };
+
+    window.authenticateWebAuthn = async function(reason) {
+      try {
+        if (!window.PublicKeyCredential) return false;
+        var challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+        var authResult = await navigator.credentials.get({
+          publicKey: {
+            challenge: challenge,
+            timeout: 60000,
+            userVerification: 'preferred',
+            allowCredentials: []
+          }
+        });
+        return !!authResult;
+      } catch (e) {
+        console.warn('WebAuthn authentication notice:', e);
+        return false;
+      }
+    };
+
+    // Preprocessing Canvas untuk struk belanja (Downscale & Contrast Enhance)
+    function preprocessReceiptImage(base64Data, maxDim) {
+      return new Promise(function(resolve) {
+        var img = new Image();
+        img.onload = function() {
+          var w = img.width;
+          var h = img.height;
+          var limit = maxDim || 1200;
+          if (w > limit || h > limit) {
+            if (w > h) {
+              h = Math.round((h * limit) / w);
+              w = limit;
+            } else {
+              w = Math.round((w * limit) / h);
+              h = limit;
+            }
+          }
+          var canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          var ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+
+          // Contrast enhancement untuk teks thermal printer
+          try {
+            var imgData = ctx.getImageData(0, 0, w, h);
+            var d = imgData.data;
+            for (var i = 0; i < d.length; i += 4) {
+              var lum = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+              if (lum < 135) {
+                lum = Math.max(0, lum * 0.65);
+              } else {
+                lum = Math.min(255, lum * 1.15 + 25);
+              }
+              d[i] = lum;
+              d[i + 1] = lum;
+              d[i + 2] = lum;
+            }
+            ctx.putImageData(imgData, 0, 0);
+          } catch(e) {}
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = function() {
+          resolve('data:image/jpeg;base64,' + base64Data);
+        };
+        img.src = 'data:image/jpeg;base64,' + base64Data;
+      });
+    }
+
+    // On-device browser OCR helper for MyFinance (Blueprint Section 4.5 & 14 #9)
+    window.performReceiptOcr = function(base64Image) {
+      return new Promise(function(resolve) {
+        var timer = setTimeout(function() {
+          console.warn('OCR timed out, proceeding with manual review');
+          resolve('');
+        }, 35000);
+
+        if (typeof Tesseract === 'undefined') {
+          clearTimeout(timer);
+          resolve('');
+          return;
+        }
+
+        preprocessReceiptImage(base64Image, 1200).then(function(processedDataUrl) {
+          return Tesseract.recognize(processedDataUrl, 'eng', {
+            logger: function(m) {
+              // progress tracking
+            }
+          });
+        }).then(function(result) {
+          clearTimeout(timer);
+          resolve(result.data.text || '');
+        }).catch(function(err) {
+          clearTimeout(timer);
+          console.warn('Tesseract OCR notice:', err);
+          resolve('');
+        });
+      });
+    };
+  </script>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
